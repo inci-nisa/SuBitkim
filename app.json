@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "SuBitkim",
-    "slug": "SuBitkim",
+    "slug": "subitkim",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,16 +10,21 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.subitkim.app",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#0E2231",
+        "foregroundImage": "./assets/adaptive-icon.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6c4b5609-a280-4f8c-ac8b-1bfde7903ac2"
+      }
     }
   }
 }

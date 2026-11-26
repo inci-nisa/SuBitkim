@@ -1,8 +1,11 @@
-import React, { useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
   Keyboard,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -11,6 +14,57 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+const STORAGE_KEY = '@subitkim_data_v1';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+const DAILY_REMINDERS = [
+  {
+    hour: 10,
+    minute: 30,
+    body: 'Günaydın! Bitkine sabah suyunu vermeyi unutma 🌱',
+  },
+  {
+    hour: 14,
+    minute: 30,
+    body: 'Öğle molası! Bir bardak su içip bitkini canlandır 💧',
+  },
+  {
+    hour: 18,
+    minute: 30,
+    body: 'Akşamüstü oldu, bitkini susuz bırakma 🪴',
+  },
+  {
+    hour: 21,
+    minute: 0,
+    body: 'Günü tamamlamadan son bir bardak su içmeye ne dersin? 🌺',
+  },
+];
+
+const getTodayKey = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const getYesterdayKey = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 
 const THEMES = {
   light: {
@@ -40,17 +94,186 @@ export default function App() {
   const [isDark, setIsDark] = useState(currentHour < 6 || currentHour >= 19);
   const theme = isDark ? THEMES.dark : THEMES.light;
 
+  const [isLoaded, setIsLoaded] = useState(false);
   const [waterIntake, setWaterIntake] = useState(0);
   const [dailyGoal, setDailyGoal] = useState(2000);
   const [streak, setStreak] = useState(0);
   const [isCompletedToday, setIsCompletedToday] = useState(false);
+  const [lastCompletedDate, setLastCompletedDate] = useState<string | null>(
+    null
+  );
   const [history, setHistory] = useState<number[]>([]);
+  const [remindersEnabled, setRemindersEnabled] = useState(true);
 
   const [customAmount, setCustomAmount] = useState('');
   const [isEditingGoal, setIsEditingGoal] = useState(false);
   const [goalInput, setGoalInput] = useState('2000');
 
   const plantScale = useRef(new Animated.Value(1)).current;
+
+  const setupDailyNotifications = async (): Promise<boolean> => {
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('water-reminders', {
+          name: 'Su İçme Hatırlatıcıları',
+          importance: Notifications.AndroidImportance.HIGH,
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#0D9488',
+        });
+      }
+
+      const { status: existingStatus } =
+        await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+
+      if (finalStatus !== 'granted') {
+        return false;
+      }
+
+      await Notifications.cancelAllScheduledNotificationsAsync();
+
+      for (const item of DAILY_REMINDERS) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: '💧 SuBitkim',
+            body: item.body,
+            sound: true,
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DAILY,
+            hour: item.hour,
+            minute: item.minute,
+            channelId: 'water-reminders',
+          },
+        });
+      }
+
+      return true;
+    } catch (error) {
+      console.warn('Bildirim ayarlanırken hata oluştu:', error);
+      return false;
+    }
+  };
+
+  // Uygulama açıldığında kayıtlı verileri yükle
+  useEffect(() => {
+    const loadSavedData = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        let shouldEnableReminders = true;
+
+        if (raw) {
+          const saved = JSON.parse(raw);
+          const today = getTodayKey();
+          const yesterday = getYesterdayKey();
+
+          const savedGoal = saved.dailyGoal ?? 2000;
+          setDailyGoal(savedGoal);
+          setGoalInput(String(savedGoal));
+
+          const validStreak =
+            saved.lastCompletedDate === today ||
+            saved.lastCompletedDate === yesterday
+              ? saved.streak ?? 0
+              : 0;
+
+          setStreak(validStreak);
+          setLastCompletedDate(saved.lastCompletedDate ?? null);
+
+          if (typeof saved.remindersEnabled === 'boolean') {
+            shouldEnableReminders = saved.remindersEnabled;
+          }
+
+          if (saved.savedDate === today) {
+            setWaterIntake(saved.waterIntake ?? 0);
+            setIsCompletedToday(Boolean(saved.isCompletedToday));
+            setHistory(Array.isArray(saved.history) ? saved.history : []);
+          } else {
+            setWaterIntake(0);
+            setIsCompletedToday(false);
+            setHistory([]);
+          }
+        }
+
+        if (shouldEnableReminders) {
+          const granted = await setupDailyNotifications();
+          setRemindersEnabled(granted);
+        } else {
+          setRemindersEnabled(false);
+        }
+      } catch (error) {
+        console.warn('Veri yüklenirken hata oluştu:', error);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+
+    loadSavedData();
+  }, []);
+
+  // Her değişiklikte verileri telefon hafızasına kaydet
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const saveData = async () => {
+      try {
+        const payload = {
+          savedDate: getTodayKey(),
+          waterIntake,
+          dailyGoal,
+          streak,
+          isCompletedToday,
+          lastCompletedDate,
+          history,
+          remindersEnabled,
+        };
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (error) {
+        console.warn('Veri kaydedilirken hata oluştu:', error);
+      }
+    };
+
+    saveData();
+  }, [
+    isLoaded,
+    waterIntake,
+    dailyGoal,
+    streak,
+    isCompletedToday,
+    lastCompletedDate,
+    history,
+    remindersEnabled,
+  ]);
+
+  const toggleReminders = async () => {
+    if (remindersEnabled) {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+      setRemindersEnabled(false);
+      Alert.alert(
+        '🔕 Hatırlatıcı Kapatıldı',
+        'Günlük su içme bildirimleri durduruldu.'
+      );
+    } else {
+      const granted = await setupDailyNotifications();
+      if (granted) {
+        setRemindersEnabled(true);
+        Alert.alert(
+          '🔔 Hatırlatıcı Açıldı',
+          'Her gün 10:30, 14:30, 18:30 ve 21:00 saatlerinde su hatırlatması alacaksın!'
+        );
+      } else {
+        Alert.alert(
+          'Bildirim İzni Gerekli',
+          'Hatırlatıcıları açmak için telefon ayarlarından SuBitkim bildirimlerine izin vermelisin.'
+        );
+      }
+    }
+  };
 
   const bouncePlant = () => {
     Animated.sequence([
@@ -129,6 +352,7 @@ export default function App() {
     if (nextIntake >= dailyGoal && !isCompletedToday) {
       setStreak((prev) => prev + 1);
       setIsCompletedToday(true);
+      setLastCompletedDate(getTodayKey());
       Alert.alert(
         '🌺 Hedef Tamamlandı!',
         'Bitkin çiçek açtı ve günlük su serin +1 arttı!'
@@ -145,6 +369,7 @@ export default function App() {
     if (previousIntake < dailyGoal && isCompletedToday) {
       setStreak((prev) => Math.max(0, prev - 1));
       setIsCompletedToday(false);
+      setLastCompletedDate(null);
     }
   };
 
@@ -152,6 +377,7 @@ export default function App() {
     if (isCompletedToday) {
       setStreak((prev) => Math.max(0, prev - 1));
       setIsCompletedToday(false);
+      setLastCompletedDate(null);
     }
     setHistory([]);
     setWaterIntake(0);
@@ -173,9 +399,11 @@ export default function App() {
       if (waterIntake >= newGoal && !isCompletedToday) {
         setStreak((prev) => prev + 1);
         setIsCompletedToday(true);
+        setLastCompletedDate(getTodayKey());
       } else if (waterIntake < newGoal && isCompletedToday) {
         setStreak((prev) => Math.max(0, prev - 1));
         setIsCompletedToday(false);
+        setLastCompletedDate(null);
       }
     }
     setIsEditingGoal(false);
@@ -191,7 +419,7 @@ export default function App() {
     >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-      {/* Üst Başlık, Seri Rozeti ve Tema Butonu */}
+      {/* Üst Başlık, Seri Rozeti, Bildirim ve Tema Butonu */}
       <View style={styles.header}>
         <View>
           <Text style={[styles.greeting, { color: theme.subText }]}>
@@ -208,6 +436,16 @@ export default function App() {
               🔥 {streak} Gün
             </Text>
           </View>
+
+          <TouchableOpacity
+            style={[styles.themeButton, { backgroundColor: theme.card }]}
+            onPress={toggleReminders}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.themeIcon}>
+              {remindersEnabled ? '🔔' : '🔕'}
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.themeButton, { backgroundColor: theme.card }]}
@@ -437,7 +675,7 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   streakBadge: {
     paddingHorizontal: 12,
@@ -458,9 +696,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   themeButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 2,
@@ -470,7 +708,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   themeIcon: {
-    fontSize: 20,
+    fontSize: 18,
   },
   plantCard: {
     marginTop: 24,
